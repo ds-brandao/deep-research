@@ -15,10 +15,7 @@ if (result.error) {
 const requiredEnvVars = [
   'FIRECRAWL_KEY',
   'OPENAI_KEY',
-  'GOOGLE_KEY',
-  'AZURE_API_KEY',
-  'AZURE_RESOURCE_NAME',
-  'MISTRAL_API_KEY'
+  'GOOGLE_KEY'
 ];
 const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
 

@@ -23,14 +23,22 @@ const google = createGoogleGenerativeAI({
   apiKey: process.env.GOOGLE_KEY!,
 });
 
-const azure = createAzure({
-  apiKey: process.env.AZURE_KEY!,
-  resourceName: process.env.AZURE_RESOURCE_NAME,
-});
+// New initialization to make API keys optional
+const azureApiKey = process.env.AZURE_KEY || process.env.AZURE_API_KEY || "";
+const mistralApiKey = process.env.MISTRAL_KEY || process.env.MISTRAL_API_KEY || "";
 
-const mistral = createMistral({
-  apiKey: process.env.MISTRAL_KEY!,
-});
+const azureProvider = azureApiKey
+  ? createAzure({
+      apiKey: azureApiKey,
+      resourceName: process.env.AZURE_RESOURCE_NAME,
+    })
+  : null;
+
+const mistralProvider = mistralApiKey
+  ? createMistral({
+      apiKey: mistralApiKey,
+    })
+  : null;
 
 // Default models for each provider
 const customModel = process.env.OPENAI_MODEL || 'o3-mini';
@@ -48,11 +56,15 @@ export const googleModel = google(customGoogleModel, {
   structuredOutputs: true,
 });
 
-export const azureModel = azure(customAzureModel, {
-  structuredOutputs: true,
-});
+export const azureModel = azureProvider
+  ? azureProvider(customAzureModel, {
+      structuredOutputs: true,
+    })
+  : null;
 
-export const mistralModel = mistral(customMistralModel);
+export const mistralModel = mistralProvider
+  ? mistralProvider(customMistralModel)
+  : null;
 
 // Export a function to get the selected model
 export function getSelectedModel(modelType: 'openai' | 'google' | 'azure' | 'mistral') {
@@ -62,9 +74,19 @@ export function getSelectedModel(modelType: 'openai' | 'google' | 'azure' | 'mis
     case 'google':
       return googleModel;
     case 'azure':
-      return azureModel;
+      if (azureModel) {
+        return azureModel;
+      } else {
+        console.warn("Azure API key not provided. Falling back to OpenAI model.");
+        return o3MiniModel;
+      }
     case 'mistral':
-      return mistralModel;
+      if (mistralModel) {
+        return mistralModel;
+      } else {
+        console.warn("Mistral API key not provided. Falling back to OpenAI model.");
+        return o3MiniModel;
+      }
     default:
       return o3MiniModel;
   }
