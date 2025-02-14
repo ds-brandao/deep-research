@@ -46,6 +46,52 @@ const firecrawl = new FirecrawlApp({
   apiUrl: process.env.FIRECRAWL_BASE_URL,
 });
 
+// NEW: Helper function for retrying generateObject calls on resource exhaustion errors
+async function retryGenerateObject(params: any): Promise<any> {
+  const maxAttempts = 3;
+  const waitTime = 60000; // 1 minute
+  let attempts = 0;
+  while (true) {
+    try {
+      return await generateObject(params);
+    } catch (e: any) {
+      if (e.message && e.message.includes('Resource has been exhausted')) {
+        attempts++;
+        if (attempts >= maxAttempts) {
+          throw e;
+        }
+        console.warn(`Resource exhausted. Waiting for ${waitTime} ms before retrying... (attempt ${attempts}/${maxAttempts})`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      } else {
+        throw e;
+      }
+    }
+  }
+}
+
+// NEW: Helper function for retrying Firecrawl search calls on status 429 errors
+async function retryFircrawlSearch(query: string, options: any): Promise<SearchResponse> {
+  const maxAttempts = 3;
+  const waitTime = 60000; // 1 minute
+  let attempts = 0;
+  while (true) {
+    try {
+      return await firecrawl.search(query, options);
+    } catch (e: any) {
+      if ((e.statusCode === 429) || (e.message && e.message.includes('429'))) {
+        attempts++;
+        if (attempts >= maxAttempts) {
+          throw e;
+        }
+        console.warn(`Fircrawl search rate limit encountered. Waiting for ${waitTime} ms before retrying... (attempt ${attempts}/${maxAttempts})`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      } else {
+        throw e;
+      }
+    }
+  }
+}
+
 // take en user query, return a list of SERP queries
 async function generateSerpQueries({
   query,
@@ -58,7 +104,7 @@ async function generateSerpQueries({
   // optional, if provided, the research will continue from the last learning
   learnings?: string[];
 }) {
-  const res = await generateObject({
+  const res = await retryGenerateObject({
     model: global.selectedModel,
     system: systemPrompt(),
     prompt: `Given the following prompt from the user, generate a list of SERP queries to research the topic. Return a maximum of ${numQueries} queries, but feel free to return less if the original prompt is clear. Make sure each query is unique and not similar to each other: <prompt>${query}</prompt>\n\n${
@@ -107,7 +153,7 @@ async function processSerpResult({
   );
   log(`Ran ${query}, found ${contents.length} contents`);
 
-  const res = await generateObject({
+  const res = await retryGenerateObject({
     model: global.selectedModel,
     abortSignal: AbortSignal.timeout(60_000),
     system: systemPrompt(),
@@ -152,7 +198,7 @@ export async function writeFinalReport({
   const res = await generateObject({
     model: global.selectedModel,
     system: systemPrompt(),
-    prompt: `Given the following prompt from the user, write a final report on the topic using the learnings from research. Make it as as detailed as possible, aim for 3 or more pages, include ALL the learnings from research:\n\n<prompt>${prompt}</prompt>\n\nHere are all the learnings from previous research:\n\n<learnings>\n${learningsString}\n</learnings>`,
+    prompt: `Given the following prompt from the user, write a final report on the topic using the learnings from research. Make it as as detailed as possible, aim for 3 or more pages with MLA source citations, include ALL the learnings from research:\n\n<prompt>${prompt}</prompt>\n\nHere are all the learnings from previous research:\n\n<learnings>\n${learningsString}\n</learnings>`,
     schema: z.object({
       reportMarkdown: z
         .string()
@@ -208,10 +254,10 @@ export async function deepResearch({
   const limit = pLimit(ConcurrencyLimit);
 
   const results = await Promise.all(
-    serpQueries.map(serpQuery =>
+    serpQueries.map((serpQuery: { query: string; researchGoal: string }) =>
       limit(async () => {
         try {
-          const result = await firecrawl.search(serpQuery.query, {
+          const result = await retryFircrawlSearch(serpQuery.query, {
             timeout: 15000,
             limit: 5,
             scrapeOptions: { formats: ['markdown'] },
@@ -244,7 +290,7 @@ export async function deepResearch({
 
             const nextQuery = `
             Previous research goal: ${serpQuery.researchGoal}
-            Follow-up research directions: ${newLearnings.followUpQuestions.map(q => `\n${q}`).join('')}
+            Follow-up research directions: ${newLearnings.followUpQuestions.map((q: string) => `\n${q}`).join('')}
           `.trim();
 
             return deepResearch({
@@ -280,8 +326,8 @@ export async function deepResearch({
             visitedUrls: [],
           };
         }
-      }),
-    ),
+      })
+    )
   );
 
   return {
